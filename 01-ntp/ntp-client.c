@@ -285,7 +285,6 @@ void demonstrate_epoch_conversion(void) {
     // Get current time
     struct timeval tv;
     gettimeofday(&tv, NULL);
-    
     uint32_t unix_seconds = tv.tv_sec;
     uint32_t ntp_seconds = unix_seconds + NTP_EPOCH_OFFSET;
     
@@ -335,9 +334,18 @@ void demonstrate_epoch_conversion(void) {
  * Use demonstrate_epoch_conversion() to verify your conversion logic
  */
 void get_current_ntp_time(ntp_timestamp_t *ntp_ts){
-    printf("get_current_ntp_time() - TO BE IMPLEMENTED\n");
+    // printf("get_current_ntp_time() - TO BE IMPLEMENTED\n");
     // TODO: Implement this function
     // Hint: Use gettimeofday(), convert epoch, scale microseconds
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    
+    uint32_t unix_seconds = tv.tv_sec;
+    uint32_t micro_secs = tv.tv_usec;
+
+    ntp_ts->seconds = unix_seconds + NTP_EPOCH_OFFSET;
+    ntp_ts->fraction = micro_secs * pow(2,32) / 1000000;
+    
     memset(ntp_ts, 0, sizeof(ntp_timestamp_t));
 }
 
@@ -370,6 +378,9 @@ void ntp_time_to_string(const ntp_timestamp_t *ntp_ts, char *buffer, size_t buff
     printf("ntp_time_to_string() - TO BE IMPLEMENTED\n");
     // TODO: Implement this function
     // Hint: Convert NTP to Unix time, use localtime/gmtime, format with snprintf
+    ntp_timestamp_t *unix_time = ntp_ts - NTP_EPOCH_OFFSET; // wth is wrong here
+    uint32_t ntp_microsecs = (ntp_ts->fraction * 1000000) / pow(2, 32);
+    uint32_t unix_seconds = ntp_ts->seconds - NTP_EPOCH_OFFSET;
     snprintf(buffer, buffer_size, "TO BE IMPLEMENTED");
 }
 
