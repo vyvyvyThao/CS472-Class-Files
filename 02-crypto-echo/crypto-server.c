@@ -9,211 +9,6 @@
  * handling, and the server-side protocol implementation.
  * 
  * =============================================================================
- * WHAT YOU NEED TO IMPLEMENT:
- * =============================================================================
- * 
- * 1. SERVER SOCKET SETUP (start_server function):
- *    - Create a TCP socket using socket()
- *    - Set SO_REUSEADDR socket option (helpful during development)
- *    - Configure server address structure (struct sockaddr_in)
- *    - Bind the socket to the address using bind()
- *    - Start listening with listen()
- *    - Call your server loop function
- *    - Close socket on shutdown
- * 
- * 2. SERVER MAIN LOOP:
- *    - Create a function that handles multiple clients sequentially
- *    - Loop to:
- *      a) Accept incoming connections using accept()
- *      b) Get client's IP address for logging (inet_ntop)
- *      c) Call your client service function
- *      d) Close the client socket when done
- *      e) Return to accept next client (or exit if shutdown requested)
- * 
- * 3. CLIENT SERVICE LOOP:
- *    - Create a function that handles communication with ONE client
- *    - Allocate buffers for sending and receiving
- *    - Maintain session keys (client_key and server_key)
- *    - Loop to:
- *      a) Receive a PDU from the client using recv()
- *      b) Handle recv() return values (0 = closed, <0 = error)
- *      c) Parse the received PDU
- *      d) Check for special commands (exit, server shutdown)
- *      e) Build response PDU based on message type
- *      f) Send response using send()
- *      g) Return appropriate status code when client exits
- *    - Free buffers before returning
- * 
- * 4. RESPONSE BUILDING:
- *    - Consider creating a helper function to build response PDUs
- *    - Handle different message types:
- *      * MSG_KEY_EXCHANGE: Call gen_key_pair(), send client_key to client
- *      * MSG_DATA: Echo back with "echo " prefix
- *      * MSG_ENCRYPTED_DATA: Decrypt, add "echo " prefix, re-encrypt
- *      * MSG_CMD_CLIENT_STOP: No response needed (client will exit)
- *      * MSG_CMD_SERVER_STOP: No response needed (server will exit)
- *    - Set proper direction (DIR_RESPONSE)
- *    - Return total PDU size
- * 
- * =============================================================================
- * ONE APPROACH TO SOLVE THIS PROBLEM:
- * =============================================================================
- * 
- * FUNCTION STRUCTURE:
- * 
- * void start_server(const char* addr, int port) {
- *     // 1. Create TCP socket
- *     // 2. Set SO_REUSEADDR option (for development)
- *     // 3. Configure server address (sockaddr_in)
- *     //    - Handle "0.0.0.0" specially (use INADDR_ANY)
- *     // 4. Bind socket to address
- *     // 5. Start listening (use BACKLOG constant)
- *     // 6. Call your server loop function
- *     // 7. Close socket
- * }
- * 
- * int server_loop(int server_socket, const char* addr, int port) {
- *     // 1. Print "Server listening..." message
- *     // 2. Infinite loop:
- *     //    a) Accept connection (creates new client socket)
- *     //    b) Get client IP using inet_ntop()
- *     //    c) Print "Client connected..." message
- *     //    d) Call service_client_loop(client_socket)
- *     //    e) Check return code:
- *     //       - RC_CLIENT_EXITED: close socket, accept next client
- *     //       - RC_CLIENT_REQ_SERVER_EXIT: close sockets, return
- *     //       - Error: close socket, continue
- *     //    f) Close client socket
- *     // 3. Return when server shutdown requested
- * }
- * 
- * int service_client_loop(int client_socket) {
- *     // 1. Allocate send/receive buffers
- *     // 2. Initialize keys to NULL_CRYPTO_KEY
- *     // 3. Loop:
- *     //    a) Receive PDU from client
- *     //    b) Check recv() return:
- *     //       - 0: client closed, return RC_CLIENT_EXITED
- *     //       - <0: error, return RC_CLIENT_EXITED
- *     //    c) Cast buffer to crypto_msg_t*
- *     //    d) Check for MSG_CMD_SERVER_STOP -> return RC_CLIENT_REQ_SERVER_EXIT
- *     //    e) Build response PDU (use helper function)
- *     //    f) Send response
- *     //    g) Loop back
- *     // 4. Free buffers before returning
- * }
- * 
- * int build_response(crypto_msg_t *request, crypto_msg_t *response, 
- *                    crypto_key_t *client_key, crypto_key_t *server_key) {
- *     // 1. Set response->header.direction = DIR_RESPONSE
- *     // 2. Set response->header.msg_type = request->header.msg_type
- *     // 3. Switch on request type:
- *     //    MSG_KEY_EXCHANGE:
- *     //      - Call gen_key_pair(server_key, client_key)
- *     //      - Copy client_key to response->payload
- *     //      - Set payload_len = sizeof(crypto_key_t)
- *     //    MSG_DATA:
- *     //      - Format: "echo <original message>"
- *     //      - Copy to response->payload
- *     //      - Set payload_len
- *     //    MSG_ENCRYPTED_DATA:
- *     //      - Decrypt request->payload using decrypt_string()
- *     //      - Format: "echo <decrypted message>"
- *     //      - Encrypt result using encrypt_string()
- *     //      - Copy encrypted data to response->payload
- *     //      - Set payload_len
- *     //    MSG_CMD_*:
- *     //      - Set payload_len = 0
- *     // 4. Return sizeof(crypto_pdu_t) + payload_len
- * }
- * 
- * =============================================================================
- * IMPORTANT PROTOCOL DETAILS:
- * =============================================================================
- * 
- * SERVER RESPONSIBILITIES:
- * 1. Generate encryption keys when client requests (MSG_KEY_EXCHANGE)
- * 2. Send the CLIENT'S key to the client (not the server's key!)
- * 3. Keep both keys: server_key (for decrypting client messages)
- *                    client_key (to send to client)
- * 4. Echo messages back with "echo " prefix
- * 5. Handle encrypted data: decrypt -> process -> encrypt -> send
- * 
- * KEY GENERATION:
- *   crypto_key_t server_key, client_key;
- *   gen_key_pair(&server_key, &client_key);
- *   // Send client_key to the client in MSG_KEY_EXCHANGE response
- *   memcpy(response->payload, &client_key, sizeof(crypto_key_t));
- * 
- * DECRYPTING CLIENT DATA:
- *   // Client encrypted with their key, we decrypt with server_key
- *   uint8_t decrypted[MAX_SIZE];
- *   decrypt_string(server_key, decrypted, request->payload, request->header.payload_len);
- *   decrypted[request->header.payload_len] = '\0'; // Null-terminate
- * 
- * ENCRYPTING RESPONSE:
- *   // We encrypt with server_key for client to decrypt with their key
- *   uint8_t encrypted[MAX_SIZE];
- *   int encrypted_len = encrypt_string(server_key, encrypted, plaintext, plaintext_len);
- *   memcpy(response->payload, encrypted, encrypted_len);
- *   response->header.payload_len = encrypted_len;
- * 
- * RETURN CODES:
- *   RC_CLIENT_EXITED          - Client disconnected normally
- *   RC_CLIENT_REQ_SERVER_EXIT - Client requested server shutdown
- *   RC_OK                     - Success
- *   Negative values           - Errors
- * 
- * =============================================================================
- * SOCKET PROGRAMMING REMINDERS:
- * =============================================================================
- * 
- * CREATING AND BINDING:
- *   int sockfd = socket(AF_INET, SOCK_STREAM, 0);
- *   
- *   struct sockaddr_in addr;
- *   memset(&addr, 0, sizeof(addr));
- *   addr.sin_family = AF_INET;
- *   addr.sin_port = htons(port);
- *   addr.sin_addr.s_addr = INADDR_ANY;  // or use inet_pton()
- *   
- *   bind(sockfd, (struct sockaddr*)&addr, sizeof(addr));
- *   listen(sockfd, BACKLOG);
- * 
- * ACCEPTING CONNECTIONS:
- *   struct sockaddr_in client_addr;
- *   socklen_t addr_len = sizeof(client_addr);
- *   int client_sock = accept(server_sock, (struct sockaddr*)&client_addr, &addr_len);
- * 
- * GETTING CLIENT IP:
- *   char client_ip[INET_ADDRSTRLEN];
- *   inet_ntop(AF_INET, &client_addr.sin_addr, client_ip, INET_ADDRSTRLEN);
- * 
- * =============================================================================
- * DEBUGGING TIPS:
- * =============================================================================
- * 
- * 1. Use print_msg_info() to display received and sent PDUs
- * 2. Print client IP when connections are accepted
- * 3. Check all socket operation return values
- * 4. Test with plaintext (MSG_DATA) before trying encryption
- * 5. Verify keys are generated correctly (print key values)
- * 6. Use telnet or netcat to test basic connectivity first
- * 7. Handle partial recv() - though for this assignment, assume full PDU arrives
- * 
- * =============================================================================
- * TESTING RECOMMENDATIONS:
- * =============================================================================
- * 
- * 1. Start simple: Accept connection and echo plain text
- * 2. Test key exchange: Client sends '#', server generates and returns key
- * 3. Test encryption: Client sends '!message', server decrypts, echoes, encrypts
- * 4. Test multiple clients: Connect, disconnect, connect again
- * 5. Test shutdown: Client sends '=', server exits gracefully
- * 6. Test error cases: Client disconnects unexpectedly
- * 
- * Good luck! Server programming requires careful state management!
- * =============================================================================
  */
 
 #include <stdio.h>
@@ -226,6 +21,11 @@
 #include "crypto-server.h"
 #include "crypto-lib.h"
 #include "protocol.h"
+
+uint8_t compute_hash(const char *message, size_t len);  // Defined in crypto-client.c
+int server_loop(int server_socket, const char* addr, int port);
+int service_client_loop(int client_socket);
+int build_response(crypto_msg_t *request, crypto_msg_t *response, crypto_key_t *client_key, crypto_key_t *server_key);
 
 
 /* =============================================================================
@@ -246,30 +46,23 @@
  * NOTE: If addr is "0.0.0.0", use INADDR_ANY instead of inet_pton()
  */
 
-// Global socket for signal handler
-int server_sockfd = -1;
-int client_sockfd = -1;
+// External references to global sockets (defined in crypto-echo.c)
+extern int server_sockfd;
+extern int client_sockfd;
 
 void start_server(const char* addr, int port) {
-    int sockfd, client_sock;
-    struct sockaddr_in server_addr, client_addr;
-    socklen_t client_addr_len = sizeof(client_addr);
-    char client_ip[INET_ADDRSTRLEN];
-    char extracted_msg[BUFFER_SIZE];
-    char response_msg[BUFFER_SIZE];
-    ssize_t pdu_len;
+    int sockfd;
+    struct sockaddr_in server_addr;
     int reuse = 1;
-    int server_should_exit = 0;
 
     // 1. Create TCP socket
     sockfd = socket(AF_INET, SOCK_STREAM, 0);
-
     if (sockfd < 0) {
         perror("Error creating socket");
         exit(EXIT_FAILURE);
     }
 
-    server_sockfd = sockfd;
+    server_sockfd = sockfd; // For signal handler
 
     // 2. Set SO_REUSEADDR option (for development)
     if (setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse)) < 0) {
@@ -309,206 +102,308 @@ void start_server(const char* addr, int port) {
     }
     
     printf("Server listening on %s:%d\n", addr, port);
-    printf("Server will handle multiple clients sequentially.\n");
-    printf("Send 'exit server' from any client to shutdown the server.\n");
-    printf("Press Ctrl+C to stop server immediately.\n\n");
-
+    
     // 6. Call your server loop function
-    while (!server_should_exit) {
-        printf("Waiting for client connection...\n");
-        
-        // Accept client connection
-        client_sock = accept(sockfd, (struct sockaddr*)&client_addr, &client_addr_len);
-        if (client_sock < 0) {
-            perror("Error accepting connection");
-            continue; // Try to accept next connection
-        }
-        
-        client_sockfd = client_sock; // For signal handler
-        
-        // Get client IP address for logging
-        inet_ntop(AF_INET, &client_addr.sin_addr, client_ip, INET_ADDRSTRLEN);
-        printf("Client connected from %s:%d\n", client_ip, ntohs(client_addr.sin_port));
-        printf("Server ready to process messages from this client...\n");
-        
-        // Client communication loop
-        while (1) {
-            // Receive PDU from client
-            pdu_len = recv_pdu(client_sock, extracted_msg, sizeof(extracted_msg));
-            
-            if (pdu_len < 0) {
-                printf("Error receiving message from client.\n");
-                break; // Close this client, wait for next one
-            } else if (pdu_len == 0) {
-                printf("Client disconnected gracefully.\n");
-                break; // Close this client, wait for next one
-            }
-            
-            printf("Received from client: \"%s\"\n", extracted_msg);
-            
-            // Check for exit server command
-            if (strcmp(extracted_msg, "exit server") == 0) {
-                printf("Client requested server shutdown.\n");
-                
-                // Send shutdown response
-                strcpy(response_msg, "echo: exit server - The server is exiting");
-                if (send_pdu(client_sock, response_msg) < 0) {
-                    perror("Error sending shutdown response");
-                } else {
-                    printf("Sent shutdown message to client: \"%s\"\n", response_msg);
-                }
-                
-                server_should_exit = 1; // Signal to exit main server loop
-                break; // Break out of client loop
-            }
-            
-            // Create echo response: "echo: original_message"
-            snprintf(response_msg, sizeof(response_msg), "echo: %.500s", extracted_msg);
-            
-            // Send response PDU back to client
-            if (send_pdu(client_sock, response_msg) < 0) {
-                printf("Error sending response to client. Client may have disconnected.\n");
-                break;
-            }
-            
-            printf("Sent to client: \"%s\"\n", response_msg);
-            printf("---\n");
-        }
-        
-        // Close current client connection
-        close(client_sock);
-        client_sockfd = -1;
-        printf("Client connection closed.\n");
-        
-        if (!server_should_exit) {
-            printf("Ready for next client connection.\n\n");
-        }
-    }
-
+    server_loop(sockfd, addr, port);
+    
     // 7. Close socket
     close(sockfd);
     server_sockfd = -1;
     printf("Server shutdown complete.\n");
-} 
+}
+
 
 int server_loop(int server_socket, const char* addr, int port) {
-    // 1. Print "Server listening..." message
-    printf("Server listening...\n");
-
-    // is this the right length?
-    socklen_t client_addr_len = sizeof(addr);
+    struct sockaddr_in client_addr;
+    socklen_t client_addr_len = sizeof(client_addr);
     char client_ip[INET_ADDRSTRLEN];
-
+    int client_socket;
+    int result;
+    
+    // 1. Print "Server listening..." message
+    printf("Waiting for client connection...\n");
+    
     // 2. Infinite loop:
     while (1) {
-
         //    a) Accept connection (creates new client socket)
+        client_socket = accept(server_socket, (struct sockaddr*)&client_addr, &client_addr_len);
+        if (client_socket < 0) {
+            perror("Error accepting connection");
+            continue;
+        }
         
-        // not sure if it's client_sockfd here
-        int client_sock = accept(server_socket, (struct sockaddr*)&addr, &client_addr_len);
-
+        client_sockfd = client_socket; // For signal handler
+        
         //    b) Get client IP using inet_ntop()
-        inet_ntop(AF_INET, addr, client_ip, INET_ADDRSTRLEN);
+        inet_ntop(AF_INET, &client_addr.sin_addr, client_ip, INET_ADDRSTRLEN);
         
         //    c) Print "Client connected..." message
-        printf("Client connected from %s:%d\n", client_ip, ntohs(port));
-
+        printf("Client connected from %s:%d\n", client_ip, ntohs(client_addr.sin_port));
+        
         //    d) Call service_client_loop(client_socket)
-        int loop = service_client_loop(client_sock);
-
+        result = service_client_loop(client_socket);
+        
         //    e) Check return code:
-        //       - RC_CLIENT_EXITED: close socket, accept next client
-        //       - RC_CLIENT_REQ_SERVER_EXIT: close sockets, return
-        //       - Error: close socket, continue
         //    f) Close client socket
+        close(client_socket);
+        client_sockfd = -1; // Reset for signal handler
+        printf("Client connection closed.\n");
+        
+        //       - RC_CLIENT_EXITED: close socket, accept next client
+        if (result == RC_CLIENT_EXITED) {
+            printf("Ready for next client connection.\n\n");
+            continue;
+        }
+        //       - RC_CLIENT_REQ_SERVER_EXIT: close sockets, return
+        else if (result == RC_CLIENT_REQ_SERVER_EXIT) {
+            printf("Server shutdown requested by client.\n");
+            break;
+        }
+        //       - Error: close socket, continue
+        else {
+            printf("Error in client service, ready for next client.\n\n");
+            continue;
+        }
     }
-
+    
     // 3. Return when server shutdown requested
+    return 0;
 }
 
 int service_client_loop(int client_socket) {
     // 1. Allocate send/receive buffers
-    char *received_msg = malloc(BUFFER_SIZE);
-    char *sent_msg = malloc(BUFFER_SIZE);
-    ssize_t pdu_len;
-
+    char *send_buffer = malloc(BUFFER_SIZE);
+    char *recv_buffer = malloc(BUFFER_SIZE);
+    
     // 2. Initialize keys to NULL_CRYPTO_KEY
+    crypto_key_t server_key = NULL_CRYPTO_KEY;
+    crypto_key_t client_key = NULL_CRYPTO_KEY;
+    ssize_t received;
+    int response_size;
+    
+    if (!send_buffer || !recv_buffer) {
+        fprintf(stderr, "Error: Memory allocation failed\n");
+        if (send_buffer) free(send_buffer);
+        if (recv_buffer) free(recv_buffer);
+        return RC_CLIENT_EXITED;
+    }
+    
     // 3. Loop:
     while (1) {
-    //  a) Receive PDU from client
-        pdu_len = recv_pdu(client_socket, received_msg, sizeof(extracted_msg));
-    //  b) Check recv() return:
-        //  0: client closed, return RC_CLIENT_EXITED
-        if (pdu_len == 0) {
-            printf("Client disconnected gracefully.\n");
-            // break; 
-            return RC_CLIENT_EXITED;
+        //    a) Receive PDU from client
+        received = recv(client_socket, recv_buffer, BUFFER_SIZE, 0);
         
-        // - <0: error, return RC_CLIENT_EXITED
-        } else if (pdu_len < 0) {
-            printf("Error receiving message from client.\n");
-            // break;
+        //    b) Check recv() return:
+        if (received <= 0) {
+            if (received == 0) {
+                //       - 0: client closed, return RC_CLIENT_EXITED
+                printf("Client disconnected gracefully.\n");
+            } else {
+                //       - <0: error, return RC_CLIENT_EXITED
+                perror("Error receiving data from client");
+            }
+            // 4. Free buffers before returning
+            free(send_buffer);
+            free(recv_buffer);
             return RC_CLIENT_EXITED;
         }
-    //  c) Cast buffer to crypto_msg_t*
-        crypto_msg_t* crypto_received_msg = (crypto_msg_t*)received_msg; 
-
-    //  d) Check for MSG_CMD_SERVER_STOP -> return RC_CLIENT_REQ_SERVER_EXIT
-        if (crypto_received_msg == MSG_CMD_SERVER_STOP) {
+        
+        //    c) Cast buffer to crypto_msg_t*
+        crypto_msg_t *request = (crypto_msg_t *)recv_buffer;
+        
+        printf("<<<<<<<<<<<<<<< REQUEST <<<<<<<<<<<<<<<\n");
+        printf("-------------------------\n");
+        print_msg_info(request, server_key, SERVER_MODE);
+        printf("<<<<<<<<<<<<< END REQUEST <<<<<<<<<<<<<\n\n");
+        
+        //    d) Check for MSG_CMD_SERVER_STOP -> return RC_CLIENT_REQ_SERVER_EXIT
+        if (request->header.msg_type == MSG_CMD_SERVER_STOP) {
+            free(send_buffer);
+            free(recv_buffer);
             return RC_CLIENT_REQ_SERVER_EXIT;
         }
-
-    //  e) Build response PDU (use helper function)
-
-    //  f) Send response
-    //  g) Loop back
+        
+        // Check for client exit command
+        if (request->header.msg_type == MSG_CMD_CLIENT_STOP) {
+            free(send_buffer);
+            free(recv_buffer);
+            return RC_CLIENT_EXITED;
+        }
+        
+        //    e) Build response PDU (use helper function)
+        crypto_msg_t *response = (crypto_msg_t *)send_buffer;
+        response_size = build_response(request, response, &client_key, &server_key);
+        
+        if (response_size < 0) {
+            printf("[ERROR] Failed to build response\n");
+            continue; // Continue to next message
+        }
+        
+        // Print response info
+        printf(">>>>>>>>>>>>>>> RESPONSE >>>>>>>>>>>>>>>\n");
+        printf("-------------------------\n");
+        print_msg_info(response, server_key, SERVER_MODE);
+        printf(">>>>>>>>>>>>> END RESPONSE >>>>>>>>>>>>>\n\n");
+        
+        //    f) Send response
+        if (send(client_socket, send_buffer, response_size, 0) < 0) {
+            perror("Error sending response to client");
+            break;
+        }
+        
+        //    g) Loop back
     }
-    // 4. Free buffers before returning
-    free(received_msg);
-    free(sent_msg);
     
+    // 4. Free buffers before returning
+    free(send_buffer);
+    free(recv_buffer);
+    return RC_CLIENT_EXITED;
 }
+
 
 int build_response(crypto_msg_t *request, crypto_msg_t *response,
     crypto_key_t *client_key, crypto_key_t *server_key) {
     // 1. Set response->header.direction = DIR_RESPONSE
     response->header.direction = DIR_RESPONSE;
-
-    // 2. Set response->header.msg_type = request->header.msg_type
     response->header.msg_type = request->header.msg_type;
-
-    // 3. Switch on request type:
-    //    MSG_KEY_EXCHANGE:
-    //      - Call gen_key_pair(server_key, client_key)
-    //      - Copy client_key to response->payload
-    //      - Set payload_len = sizeof(crypto_key_t)
-    if (request->header.msg_type == MSG_KEY_EXCHANGE) {
-        gen_key_pair(server_key, client_key);
-        memcpy(response->payload, client_key, sizeof(crypto_key_t));
+    response->header.payload_len = 0;
+    
+    switch (request->header.msg_type) {
+        case MSG_KEY_EXCHANGE: {
+            // Generate key pair
+            if (gen_key_pair(server_key, client_key) != RC_OK) {
+                printf("[ERROR] Key generation failed\n");
+                return -1;
+            }
+            
+            // Send client's key in response
+            memcpy(response->payload, client_key, sizeof(crypto_key_t));
+            response->header.payload_len = sizeof(crypto_key_t);
+            
+            printf("Generated keys - Server: 0x%04X, Client: 0x%04X\n", 
+                   *server_key, *client_key);
+            break;
+        }
         
+        case MSG_DATA: {
+            char echo_msg[MAX_MSG_DATA_SIZE];
+            snprintf(echo_msg, sizeof(echo_msg), "echo %.*s", 
+                    (int)request->header.payload_len, request->payload);
+            
+            size_t echo_len = strlen(echo_msg);
+            memcpy(response->payload, echo_msg, echo_len);
+            response->header.payload_len = echo_len;
+            break;
+        }
+        
+        case MSG_ENCRYPTED_DATA: {
+            if (*server_key == NULL_CRYPTO_KEY) {
+                printf("[ERROR] No server key available for decryption\n");
+                return -1;
+            }
+            
+            // Decrypt incoming message
+            uint8_t decrypted[MAX_MSG_DATA_SIZE];
+            int decrypted_len = decrypt_string(*server_key, decrypted, 
+                                             request->payload, request->header.payload_len);
+            if (decrypted_len < 0) {
+                printf("[ERROR] Decryption failed\n");
+                return -1;
+            }
+            
+            decrypted[decrypted_len] = '\0';
+            
+            // Create echo response
+            char echo_msg[MAX_MSG_DATA_SIZE];
+            snprintf(echo_msg, sizeof(echo_msg), "echo %s", decrypted);
+            
+            // Encrypt echo response
+            int encrypted_len = encrypt_string(*server_key, response->payload, 
+                                             (uint8_t*)echo_msg, strlen(echo_msg));
+            if (encrypted_len < 0) {
+                printf("[ERROR] Encryption failed\n");
+                return -1;
+            }
+            
+            response->header.payload_len = encrypted_len;
+            break;
+        }
+        
+        case MSG_DIG_SIGNATURE: {
+            if (*server_key == NULL_CRYPTO_KEY) {
+                printf("[ERROR] No server key available for signature verification\n");
+                return -1;
+            }
+            
+            if (request->header.payload_len < 2) {
+                printf("[ERROR] Invalid digital signature message format\n");
+                return -1;
+            }
+            
+            // Extract encrypted signature and message
+            uint8_t encrypted_sig = request->payload[0];
+            const char *message = (const char *)&request->payload[1];
+            size_t message_len = request->header.payload_len - 1;
+            
+            printf("[DEBUG] Encrypted signature received: 0x%02X\n", encrypted_sig);
+            printf("[DEBUG] Message: '%.*s' (len=%zu)\n", (int)message_len, message, message_len);
+            
+            // Decrypt signature
+            uint8_t received_hash;
+            if (decrypt(*server_key, &received_hash, &encrypted_sig, 1) != RC_OK) {
+                printf("[ERROR] Failed to decrypt client signature\n");
+                return -1;
+            }
+            
+            // Compute hash of the received message
+            uint8_t computed_hash = compute_hash(message, message_len);
+            
+            printf("[DEBUG] Decrypted hash: 0x%02X\n", received_hash);
+            printf("[DEBUG] Computed hash: 0x%02X\n", computed_hash);
+            
+            // Verify signature
+            if (received_hash != computed_hash) {
+                printf("[ERROR] Digital signature verification failed!\n");
+                printf("Expected: 0x%02X, Got: 0x%02X\n", computed_hash, received_hash);
+                return -1;
+            }
+            
+            printf("✓ Client signature verified\n");
+            
+            // Create echo response
+            char echo_msg[MAX_MSG_DATA_SIZE];
+            snprintf(echo_msg, sizeof(echo_msg), "echo %.*s", (int)message_len, message);
+            
+            // Create signed response
+            size_t echo_len = strlen(echo_msg);
+            uint8_t response_hash = compute_hash(echo_msg, echo_len);
+            
+            // Encrypt the response hash
+            uint8_t encrypted_response_hash;
+            if (encrypt(*server_key, &encrypted_response_hash, &response_hash, 1) != RC_OK) {
+                printf("[ERROR] Failed to encrypt response signature\n");
+                return -1;
+            }
+            
+            // Build signed response payload: [encrypted_hash][response_message]
+            response->payload[0] = encrypted_response_hash;
+            memcpy(&response->payload[1], echo_msg, echo_len);
+            response->header.payload_len = 1 + echo_len;
+            
+            printf("Response signed with hash: 0x%02X\n", response_hash);
+            break;
+        }
+        
+        case MSG_CMD_CLIENT_STOP:
+        case MSG_CMD_SERVER_STOP:
+            // No response needed for commands
+            response->header.payload_len = 0;
+            break;
+            
+        default:
+            printf("[ERROR] Unknown message type: %d\n", request->header.msg_type);
+            return -1;
     }
     
-    //    MSG_DATA:
-    //      - Format: "echo <original message>"
-    //      - Copy to response->payload
-    //      - Set payload_len
-    //    MSG_ENCRYPTED_DATA:
-    //      - Decrypt request->payload using decrypt_string()
-    //      - Format: "echo <decrypted message>"
-    //      - Encrypt result using encrypt_string()
-    //      - Copy encrypted data to response->payload
-    //      - Set payload_len
-    //    MSG_CMD_*:
-    //      - Set payload_len = 0
-    // 4. Return sizeof(crypto_pdu_t) + payload_len
-}
- 
-
-void start_server(const char* addr, int port) {
-    printf("Student TODO: Implement start_server()\n");
-    printf("  - Create TCP socket\n");
-    printf("  - Bind to %s:%d\n", addr, port);
-    printf("  - Listen for connections (BACKLOG = %d)\n", BACKLOG);
-    printf("  - Accept and handle clients in a loop\n");
-    printf("  - Close socket on shutdown\n");
+    return sizeof(crypto_pdu_t) + response->header.payload_len;
 }
