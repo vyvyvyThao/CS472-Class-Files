@@ -68,6 +68,11 @@ typedef struct dp_pdu {
 #define     DP_BUFF_OVERSIZED       -8
 #define     DP_CONNECTION_CLOSED    -16
 #define     DP_ERROR_BAD_DGRAM      -32
+#define     DP_ERROR_RETRY_EXCEEDED -48
+#define     DP_ERROR_SHOULD_RETRY   -64
+
+#define     DP_MAX_RETRY_ATTEMPTS   5
+#define     DP_RETRY_DELAY_USEC     100000
 
 //PROTOTYPES - INTERNAL HELPERS
 static dp_connp dpinit();
@@ -88,8 +93,9 @@ void dpclose(dp_connp dpsession);
 void print_out_pdu(dp_pdu *pdu);
 void print_in_pdu(dp_pdu *pdu);
 int  dpmaxdgram();
+int dprand(int threshold);
 static void print_pdu_details(dp_pdu *pdu);
 static int dpsendraw(dp_connp dp, void *sbuff, int sbuff_sz);
 static int dprecvraw(dp_connp dp, void *buff, int buff_sz);
 static int dprecvdgram(dp_connp dp, void *buff, int buff_sz);
-static int dpsenddgram(dp_connp dp, void *sbuff, int sbuff_sz);
+static int dpsenddgram(dp_connp dp, void *sbuff, int sbuff_sz, int mtype);

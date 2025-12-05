@@ -1,0 +1,25 @@
+Extra Credit #1: dp-proto Retry Logic
+
+
+Summary:
+    * Implemented automatic resending for every data PDU transmitted by dpsend().
+    * Allow retrying count, delay, and simulated drop rate.
+    * Added helper routines to wait for ACKs, perform exponential backoff, and optionally simulate packet drops for testing.
+
+Key Changes:
+
+    Runtime Configuration
+        * Introduced dp_load_runtime_config() to read DP_MAX_RETRIES, DP_RETRY_DELAY_USEC, and DP_SIM_DROP_PCT.
+        * Connection initialization now calls this loader once per process.
+    Retry Loop in dpsenddgram()
+        * Each outbound datagram is sent inside a retry loop (bounded by DP_MAX_RETRY_ATTEMPTS).
+        * When an ACK is not received or a simulated drop occurs, the code waits and retransmits.
+        * After running out of retries, dpsend returns DP_ERROR_RETRY_EXCEEDED.
+    ACK Handling and Backoff
+        * dp_wait_for_ack() blocks for the expected ACK type and signals retry-worthy failures.
+        * dp_retry_backoff() waits a little longer after each failed try.
+        * dp_simulate_drop() uses dprand() to cause packet loss for testing.
+
+    Testing:
+        * Verified successful transfers under normal conditions.
+        * Exercised retry behavior by setting DP_SIM_DROP_PCT to a non-zero value and confirming resend/ack logic with console traces.
